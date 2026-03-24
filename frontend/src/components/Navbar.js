@@ -9,9 +9,9 @@ import {
   Menu,
   MenuItem,
   Chip,
-  Divider,
   useTheme,
-  useMediaQuery
+  useMediaQuery,
+  Divider
 } from '@mui/material';
 import {
   Menu as MenuIcon,
@@ -25,7 +25,7 @@ import {
   DarkMode
 } from '@mui/icons-material';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { useWallet } from '../hooks/useWallet';
+import { useWallet } from '../contexts/WalletContext';
 
 const Navbar = () => {
   const theme = useTheme();
@@ -77,9 +77,9 @@ const Navbar = () => {
                 color="inherit"
                 onClick={() => handleNavigation(item.path)}
                 sx={{
-                  backgroundColor: location.pathname === item.path ? 'action.selected' : 'transparent',
+                  backgroundColor: location.pathname === item.path ? 'rgba(255,255,255,0.1)' : 'transparent',
                   '&:hover': {
-                    backgroundColor: 'action.hover',
+                    backgroundColor: 'rgba(255,255,255,0.2)',
                   },
                 }}
                 startIcon={item.icon}
@@ -101,7 +101,7 @@ const Navbar = () => {
                     color="success"
                     size="small"
                     variant="outlined"
-                    sx={{ borderColor: 'primary.contrastText', color: 'primary.contrastText' }}
+                    sx={{ borderColor: 'white', color: 'white' }}
                   />
                   <Button color="inherit" onClick={disconnectWallet} size="small" disabled={loading}>
                     Disconnect
