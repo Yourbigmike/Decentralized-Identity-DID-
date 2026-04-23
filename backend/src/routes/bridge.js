@@ -1,5 +1,5 @@
 const express = require('express');
-const router = express.router || express.Router();
+const router = express.Router();
 const CrossChainService = require('../services/crossChainService');
 const { authMiddleware } = require('../middleware');
 const logger = require('../utils/logger');
