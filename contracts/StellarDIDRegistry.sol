@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.19;
 
 import "@openzeppelin/contracts/utils/math/SafeMath.sol";
 
@@ -28,6 +28,12 @@ contract StellarDIDRegistry {
     uint256 private _issuerCount;
     uint256 private _verifierCount;
     uint256 private _registrarCount;
+
+    // DID and credential counters for getContractStats
+    uint256 private _totalDIDs;
+    uint256 private _activeDIDs;
+    uint256 private _totalCredentials;
+    uint256 private _activeCredentials;
     
     // Contract state
     bool private _paused;
@@ -117,6 +123,17 @@ contract StellarDIDRegistry {
         require(bytes(didDocuments[did].did).length > 0, "DID does not exist");
         _;
     }
+
+    modifier validDIDFormat(string memory did) {
+        bytes memory didBytes = bytes(did);
+        require(didBytes.length >= 7, "DID: too short");
+        // Must start with 'did:'
+        require(
+            didBytes[0] == 'd' && didBytes[1] == 'i' && didBytes[2] == 'd' && didBytes[3] == ':',
+            "DID: must start with 'did:'"
+        );
+        _;
+    }
     
     /**
      * @dev Constructor - sets the deployer as the initial admin
@@ -169,15 +186,22 @@ contract StellarDIDRegistry {
     function transferAdmin(address newAdmin) external onlyAdmin {
         require(newAdmin != address(0), "AccessControl: zero address");
         require(newAdmin != _admin, "AccessControl: same admin");
-        
+
         address oldAdmin = _admin;
         _admin = newAdmin;
-        
+
         // Grant admin role to new admin
         if (!hasRole(ADMIN_ROLE, newAdmin)) {
             _grantRole(ADMIN_ROLE, newAdmin);
         }
-        
+
+        // Revoke admin role from old admin to prevent privilege retention
+        // Guard: only revoke if there will still be at least one admin remaining
+        if (hasRole(ADMIN_ROLE, oldAdmin) && _adminCount > 1) {
+            _revokeRole(ADMIN_ROLE, oldAdmin);
+            emit RoleRevoked(ADMIN_ROLE, oldAdmin, msg.sender);
+        }
+
         emit AdminTransferred(oldAdmin, newAdmin);
     }
     
@@ -246,9 +270,10 @@ contract StellarDIDRegistry {
         string memory did,
         string memory publicKey,
         string memory serviceEndpoint
-    ) external whenNotPaused returns (bool) {
+    ) external whenNotPaused validDIDFormat(did) returns (bool) {
         require(bytes(didDocuments[did].did).length == 0, "DID already exists");
-        
+        require(bytes(publicKey).length > 0, "Public key required");
+
         didDocuments[did] = DIDDocument({
             did: did,
             owner: msg.sender,
@@ -258,9 +283,11 @@ contract StellarDIDRegistry {
             active: true,
             serviceEndpoint: serviceEndpoint
         });
-        
+
         ownerToDids[msg.sender].push(did);
-        
+        _totalDIDs++;
+        _activeDIDs++;
+
         emit DIDCreated(did, msg.sender, publicKey);
         return true;
     }
@@ -273,10 +300,11 @@ contract StellarDIDRegistry {
         string memory did,
         string memory publicKey,
         string memory serviceEndpoint
-    ) external onlyAdmin whenNotPaused returns (bool) {
+    ) external onlyAdmin whenNotPaused validDIDFormat(did) returns (bool) {
         require(user != address(0), "Invalid user address");
         require(bytes(didDocuments[did].did).length == 0, "DID already exists");
-        
+        require(bytes(publicKey).length > 0, "Public key required");
+
         didDocuments[did] = DIDDocument({
             did: did,
             owner: user,
@@ -286,9 +314,11 @@ contract StellarDIDRegistry {
             active: true,
             serviceEndpoint: serviceEndpoint
         });
-        
+
         ownerToDids[user].push(did);
-        
+        _totalDIDs++;
+        _activeDIDs++;
+
         emit DIDCreated(did, user, publicKey);
         return true;
     }
@@ -345,7 +375,9 @@ contract StellarDIDRegistry {
      * @dev Deactivate DID
      */
     function deactivateDID(string memory did) external onlyOwner(did) whenNotPaused validDID(did) returns (bool) {
+        require(didDocuments[did].active, "DID is already inactive");
         didDocuments[did].active = false;
+        if (_activeDIDs > 0) _activeDIDs--;
         emit DIDDeactivated(did);
         return true;
     }
@@ -354,7 +386,9 @@ contract StellarDIDRegistry {
      * @dev Deactivate DID (Admin only - emergency deactivation)
      */
     function adminDeactivateDID(string memory did) external onlyAdmin whenNotPaused validDID(did) returns (bool) {
+        require(didDocuments[did].active, "DID is already inactive");
         didDocuments[did].active = false;
+        if (_activeDIDs > 0) _activeDIDs--;
         emit DIDDeactivated(did);
         return true;
     }
@@ -402,7 +436,10 @@ contract StellarDIDRegistry {
             dataHash: dataHash,
             revoked: false
         });
-        
+
+        _totalCredentials++;
+        _activeCredentials++;
+
         emit CredentialIssued(credentialId, issuer, subject);
         return credentialId;
     }
@@ -440,7 +477,10 @@ contract StellarDIDRegistry {
             dataHash: dataHash,
             revoked: false
         });
-        
+
+        _totalCredentials++;
+        _activeCredentials++;
+
         emit CredentialIssued(credentialId, issuer, subject);
         return credentialId;
     }
@@ -460,6 +500,7 @@ contract StellarDIDRegistry {
         require(isIssuer || isAdmin, "Only issuer or admin can revoke");
         
         credentials[credentialId].revoked = true;
+        if (_activeCredentials > 0) _activeCredentials--;
         emit CredentialRevoked(credentialId);
         return true;
     }
@@ -473,11 +514,12 @@ contract StellarDIDRegistry {
         for (uint256 i = 0; i < credentialIds.length; i++) {
             if (credentials[credentialIds[i]].issued > 0 && !credentials[credentialIds[i]].revoked) {
                 credentials[credentialIds[i]].revoked = true;
+                if (_activeCredentials > 0) _activeCredentials--;
                 emit CredentialRevoked(credentialIds[i]);
                 revokedCount = revokedCount.add(1);
             }
         }
-        
+
         return revokedCount;
     }
     
@@ -512,15 +554,7 @@ contract StellarDIDRegistry {
         uint256 totalCredentials,
         uint256 activeCredentials
     ) {
-        // Note: In a real implementation, you'd maintain counters for efficiency
-        // This is a simplified version for demonstration
-        totalDIDs = 0;
-        activeDIDs = 0;
-        totalCredentials = 0;
-        activeCredentials = 0;
-        
-        // These would be more efficiently tracked with counters
-        return (totalDIDs, activeDIDs, totalCredentials, activeCredentials);
+        return (_totalDIDs, _activeDIDs, _totalCredentials, _activeCredentials);
     }
     
     /**
@@ -578,7 +612,7 @@ contract StellarDIDRegistry {
         uint256 registrarCount
     ) {
         return (
-            "2.0.0",
+            "2.1.0",
             _admin,
             _paused,
             _adminCount,
